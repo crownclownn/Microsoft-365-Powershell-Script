@@ -1,0 +1,27 @@
+# Connect to Exchange Online
+$UserCredential = Get-Credential
+Connect-ExchangeOnline -UserPrincipalName $UserCredential.UserName -ShowProgress $true
+
+# Get all DLP policies
+$DlpPolicies = Get-DlpPolicy
+$DlpPolicyList = @()
+
+if ($DlpPolicies) {
+    foreach ($Policy in $DlpPolicies) {
+        $DlpPolicyList += [PSCustomObject]@{
+            Name = $Policy.Name
+            Mode = $Policy.Mode
+            State = $Policy.State
+            Description = $Policy.Description
+        }
+    }
+
+    # Export the data to a CSV file
+    $DlpPolicyList | Export-Csv -Path "C:\DlpPolicyList.csv" -NoTypeInformation
+    Write-Output "DLP policies exported successfully to C:\DlpPolicyList.csv"
+} else {
+    Write-Output "No DLP policies found."
+}
+
+# Disconnect from Exchange Online
+Disconnect-ExchangeOnline -Confirm:$false

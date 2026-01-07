@@ -1,0 +1,301 @@
+
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
+param(
+    # Provide either Canonical or DN for the OU. If both are supplied, DN wins.
+    [string]$SearchBaseCanonical = "ihcinfra.com/FACILITIES/Top Management",
+    [string]$SearchBaseDN        = "",
+
+    # Log directory
+    [string]$LogDir    = "C:\Temp",
+
+    # Match tokens (change these as needed, e.g., RemoveTag='removed', YearToken='2026')
+    [string]$RemoveTag = "_remove",
+    [string]$YearToken = "2025",
+    [switch]$IncludeCN = $true,      # also match on CN/displayName
+
+    # Process disabled-only users (optional)
+    [switch]$DisabledOnly = $false,
+
+    # Preview rows
+    [int]$Preview      = 10
+)
+
+# ----------------------------
+# Module checks
+# ----------------------------
+try {
+    Import-Module ActiveDirectory -ErrorAction Stop
+} catch {
+    Write-Error "ActiveDirectory module failed to load. Install RSAT or run on a machine with AD tools. Details: $($_.Exception.Message)"
+    return
+}
+
+# ----------------------------
+# Canonical → DN conversion (safe)
+# ----------------------------
+function Convert-CanonicalToDN {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][string]$Canonical
+    )
+    # Expected: domain.com/ParentOU/ChildOU[/...]
+    $parts = $Canonical -split '/'
+    if ($parts.Count -lt 2) {
+        throw "Canonical name '$Canonical' is not in the expected 'domain.com/OU/...' format."
+    }
+
+    $domain = $parts[0]
+    $ouParts = $parts[1..($parts.Length - 1)]
+
+    # Reverse OU order: leaf-first (Child, then Parent)
+    [array]::Reverse($ouParts)
+
+    $ouDN = ($ouParts | ForEach-Object { "OU=$_" }) -join ','
+    $dcDN = (($domain -split '\.') | ForEach-Object { "DC=$_" }) -join ','
+
+    return "$ouDN,$dcDN"
+}
+
+function Resolve-SearchBaseDN {
+    [CmdletBinding()]
+    param(
+        [string]$Canonical,
+        [string]$DNOverride
+    )
+    if ($DNOverride -and $DNOverride.Trim()) {
+        return $DNOverride.Trim()
+    }
+    if (-not ($Canonical -and $Canonical.Trim())) {
+        throw "No SearchBase provided. Supply -SearchBaseDN or -SearchBaseCanonical."
+    }
+
+    # Try AD lookup by canonical name
+    try {
+        $ou = Get-ADOrganizationalUnit -Filter "CanonicalName -eq '$Canonical'" -Properties DistinguishedName -ErrorAction Stop
+        if ($ou) { return $ou.DistinguishedName }
+    } catch {
+        Write-Warning "Lookup by canonical name failed: $($_.Exception.Message). Using manual conversion."
+    }
+
+    return Convert-CanonicalToDN -Canonical $Canonical
+}
+
+try {
+    $SearchBase = Resolve-SearchBaseDN -Canonical $SearchBaseCanonical -DNOverride $SearchBaseDN
+} catch {
+    Write-Error $_.Exception.Message
+    return
+}
+
+# ----------------------------
+# Prep logging
+# ----------------------------
+if (-not (Test-Path -Path $LogDir)) {
+    try { New-Item -Path $LogDir -ItemType Directory -Force | Out-Null }
+    catch { Write-Error "Failed to create log directory '$LogDir': $($_.Exception.Message)"; return }
+}
+$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$LogPath   = Join-Path $LogDir "AliasFromLogon_And_HideGAL_$timestamp.csv"
+$log       = @()
+
+Write-Host "SearchBase (DN): $SearchBase"
+Write-Host "Log file       : $LogPath"
+Write-Host "WhatIf         : $($PSCmdlet.WhatIfPreference -eq $true)"
+Write-Host "Filters        : RemoveTag='$RemoveTag' | YearToken='$YearToken' | IncludeCN=$([bool]$IncludeCN) | DisabledOnly=$([bool]$DisabledOnly)"
+
+# ----------------------------
+# Build safe PowerShell -Filter
+# ----------------------------
+$removePattern = "*$RemoveTag*"
+$yearPattern   = "*$YearToken*"
+
+$conditions = @(
+    "(sn -like '$removePattern')",
+    "(sn -like '$yearPattern')"
+)
+if ($IncludeCN) {
+    $conditions += "(cn -like '$removePattern')"
+    $conditions += "(cn -like '$yearPattern')"
+}
+$baseMatch = "(" + ($conditions -join ' -or ') + ")"
+
+$targetFilter = if ($DisabledOnly) {
+    "$baseMatch -and Enabled -eq $false"
+} else {
+    $baseMatch
+}
+
+# ----------------------------
+# Discovery
+# ----------------------------
+$targets = @()
+try {
+    $targets = Get-ADUser -SearchBase $SearchBase -SearchScope Subtree -Filter $targetFilter `
+        -Properties sn, cn, Enabled, sAMAccountName, mailNickname, msExchHideFromAddressLists, userPrincipalName
+} catch {
+    Write-Error "Failed to query target users: $($_.Exception.Message)"
+    return
+}
+
+if (-not $targets) {
+    Write-Host "No matching users in $SearchBase for filter: $targetFilter"
+    return
+}
+
+Write-Host "Found $($targets.Count) target users. Previewing first $([math]::Min($Preview,$targets.Count)):"
+$targets |
+    Select-Object -First $Preview Name, Enabled, sn, sAMAccountName, mailNickname, msExchHideFromAddressLists, DistinguishedName |
+    Format-Table -AutoSize
+
+# ----------------------------
+# Actions: Set alias from logon, then hide from GAL
+# ----------------------------
+foreach ($u in $targets) {
+    $dn      = $u.DistinguishedName
+    $upn     = $u.UserPrincipalName
+    $logon   = $u.sAMAccountName
+    $prevAli = $u.mailNickname
+    $prevHide= $u.msExchHideFromAddressLists
+
+    if ([string]::IsNullOrWhiteSpace($logon)) {
+        Write-Warning "Skipping $($dn): sAMAccountName (logon name) is empty."
+        $log += [pscustomobject]@{
+            Timestamp     = (Get-Date)
+            Step          = "SetAliasFromLogon"
+            Name          = $u.Name
+            Enabled       = $u.Enabled
+            UPN           = $upn
+            sAMAccountName= $u.sAMAccountName
+            PreviousAlias = $prevAli
+            DN            = $dn
+            Result        = "Skipped: Empty sAMAccountName"
+        }
+        continue
+    }
+
+    # 1) Set mailNickname EXACTLY to logon name (overwrite)
+    try {
+        if ($PSCmdlet.ShouldProcess($dn, "Set mailNickname='$logon' (copy of logon name)")) {
+            Set-ADUser -Identity $dn -Replace @{ mailNickname = $logon }
+        }
+
+        $log += [pscustomobject]@{
+            Timestamp     = (Get-Date)
+            Step          = "SetAliasFromLogon"
+            Name          = $u.Name
+            Enabled       = $u.Enabled
+            UPN           = $upn
+            sAMAccountName= $logon
+            PreviousAlias = $prevAli
+            NewAlias      = $logon
+            DN            = $dn
+            Result        = "Success"
+        }
+
+        Write-Host "Alias set: $($u.Name) -> mailNickname = '$logon'"
+    }
+    catch {
+        $log += [pscustomobject]@{
+            Timestamp     = (Get-Date)
+            Step          = "SetAliasFromLogon"
+            Name          = $u.Name
+            Enabled       = $u.Enabled
+            UPN           = $upn
+            sAMAccountName= $logon
+            PreviousAlias = $prevAli
+            NewAlias      = $logon
+            DN            = $dn
+            Result        = "Error: $($_.Exception.Message)"
+        }
+        Write-Warning "Failed to set mailNickname for $($dn): $($_.Exception.Message)"
+        # Proceed to hide to honor sequence even if alias failed.
+    }
+
+    # 2) Hide from GAL (set msExchHideFromAddressLists = True) — idempotent
+    if ($prevHide -eq $true) {
+        $log += [pscustomobject]@{
+            Timestamp                      = (Get-Date)
+            Step                           = "HideFromGAL"
+            Name                           = $u.Name
+            Enabled                        = $u.Enabled
+            UPN                            = $upn
+            sAMAccountName                 = $logon
+            Previous_msExchHideFromAddress = $prevHide
+            DN                             = $dn
+            Result                         = "Skipped: Already True"
+        }
+        continue
+    }
+
+    try {
+        if ($PSCmdlet.ShouldProcess($dn, "Set msExchHideFromAddressLists = True")) {
+            Set-ADUser -Identity $dn -Replace @{ msExchHideFromAddressLists = $true }
+        }
+
+        $log += [pscustomobject]@{
+            Timestamp                      = (Get-Date)
+            Step                           = "HideFromGAL"
+            Name                           = $u.Name
+            Enabled                        = $u.Enabled
+            UPN                            = $upn
+            sAMAccountName                 = $logon
+            Previous_msExchHideFromAddress = $prevHide
+            DN                             = $dn
+            Result                         = "Success"
+        }
+
+        Write-Host "Hidden from GAL: $($u.Name) ($upn)"
+    }
+    catch {
+        $log += [pscustomobject]@{
+            Timestamp                      = (Get-Date)
+            Step                           = "HideFromGAL"
+            Name                           = $u.Name
+            Enabled                        = $u.Enabled
+            UPN                            = $upn
+            sAMAccountName                 = $logon
+            Previous_msExchHideFromAddress = $prevHide
+            DN                             = $dn
+            Result                         = "Error: $($_.Exception.Message)"
+        }
+        Write-Warning "Failed to hide GAL for $($dn): $($_.Exception.Message)"
+    }
+}
+
+# ----------------------------
+# Save log & verify
+# ----------------------------
+try {
+    $log | Export-Csv -Path $LogPath -NoTypeInformation -Encoding UTF8
+    Write-Host "Log saved to: $LogPath"
+} catch {
+    Write-Warning "Failed to save log: $($_.Exception.Message)"
+}
+
+# Verification: show targets & current alias/hide flag
+Write-Host "`nVerification:"
+$verify = Get-ADUser -SearchBase $SearchBase -SearchScope Subtree -Filter $targetFilter `
+    -Properties mailNickname, msExchHideFromAddressLists, sAMAccountName, Enabled
+$verify |
+    Select-Object Name, Enabled, sAMAccountName, mailNickname, msExchHideFromAddressLists, DistinguishedName |
+    Format-Table -AutoSize
+
+# Show any mismatches where alias != logon (should be none)
+$mismatch = $verify | Where-Object { $_.mailNickname -ne $_.sAMAccountName }
+if ($mismatch) {
+    Write-Warning "Alias mismatch detected (mailNickname != sAMAccountName): $($mismatch.Count)"
+    $mismatch | Select-Object Name, sAMAccountName, mailNickname | Format-Table -AutoSize
+} else {
+    Write-Host "All target users have mailNickname exactly equal to sAMAccountName."
+}
+
+# Show any not hidden (should ideally be none)
+$notHidden = $verify | Where-Object { $_.msExchHideFromAddressLists -ne $true }
+if ($notHidden) {
+    Write-Warning "Users still not hidden from GAL: $($notHidden.Count)"
+    $notHidden | Select-Object Name, DistinguishedName | Format-Table -AutoSize
+} else {
+    Write-Host "All target users are hidden from GAL (AD attribute)."
+}
+
+Write-Host "`nCompleted."

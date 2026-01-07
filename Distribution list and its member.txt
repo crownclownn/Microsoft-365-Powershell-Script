@@ -1,0 +1,24 @@
+# Connect to Exchange Online
+$UserCredential = Get-Credential
+Connect-ExchangeOnline -UserPrincipalName $UserCredential.UserName -ShowProgress $true
+
+# Get all distribution lists and their members
+$DistributionLists = Get-DistributionGroup -ResultSize Unlimited
+$DistributionListMembers = @()
+
+foreach ($DistributionList in $DistributionLists) {
+    $Members = Get-DistributionGroupMember -Identity $DistributionList.Identity
+    foreach ($Member in $Members) {
+        $DistributionListMembers += [PSCustomObject]@{
+            DistributionListName = $DistributionList.DisplayName
+            MemberName = $Member.DisplayName
+            MemberEmail = $Member.PrimarySmtpAddress
+        }
+    }
+}
+
+# Export the data to a CSV file
+$DistributionListMembers | Export-Csv -Path "C:\DistributionListMembers.csv" -NoTypeInformation
+
+# Disconnect from Exchange Online
+Disconnect-ExchangeOnline -Confirm:$false

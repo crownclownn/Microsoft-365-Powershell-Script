@@ -1,0 +1,10 @@
+# Import the Active Directory module
+Import-Module ActiveDirectory
+
+# Get the users from Active Directory
+$users = Get-ADUser -Filter * -Property DisplayName, UserPrincipalName, SamAccountName
+
+# Export the users to a CSV file with DisplayName, UserPrincipalName, and SamAccountName
+$users | Select-Object DisplayName, UserPrincipalName, SamAccountName | Export-Csv -Path "C:\Users\arbaaz.t\AD_Users.csv" -NoTypeInformation
+
+Write-Host "Export completed successfully!"

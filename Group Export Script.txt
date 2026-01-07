@@ -1,0 +1,13 @@
+# Connect to Microsoft 365
+Connect-AzureAD
+
+# Get the group by name
+$group = Get-AzureADGroup -SearchString "TX-OK Administrators"
+
+# Get the members of the group
+$members = Get-AzureADGroupMember -ObjectId $group.ObjectId
+
+# Export the members to a CSV file with DisplayName and EmailAddress
+$members | Select-Object DisplayName, UserPrincipalName, Mail | Export-Csv -Path "C:\Users\arbaaz.t\ABC_Group_Members.csv" -NoTypeInformation
+
+Write-Host "Export completed successfully!"

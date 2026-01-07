@@ -1,0 +1,24 @@
+# Connect to Azure AD
+$UserCredential = Get-Credential
+Connect-AzureAD -Credential $UserCredential
+
+# Get all administrative users
+$AdminRoles = Get-AzureADDirectoryRole | Where-Object { $_.DisplayName -like "*Admin*" }
+$AdminUsers = @()
+
+foreach ($Role in $AdminRoles) {
+    $RoleMembers = Get-AzureADDirectoryRoleMember -ObjectId $Role.ObjectId
+    foreach ($Member in $RoleMembers) {
+        $AdminUsers += [PSCustomObject]@{
+            RoleName = $Role.DisplayName
+            UserName = $Member.DisplayName
+            UserEmail = $Member.UserPrincipalName
+        }
+    }
+}
+
+# Export the data to a CSV file
+$AdminUsers | Export-Csv -Path "C:\AdminUsers.csv" -NoTypeInformation
+
+# Disconnect from Azure AD
+Disconnect-AzureAD

@@ -1,0 +1,46 @@
+
+---
+
+### ✅ **Modules Included**
+
+1. Remove Stale Accounts from All Distribution Groups
+   Automatically removes disabled or stale accounts from all DLs.
+
+2. Ensure "All Users" DL Includes All Active Internal Users
+   Syncs all active internal users into the "All Users" distribution group.
+
+3. Add Specific User to a Distribution Group
+   Allows manual addition of users to any DL as needed.
+
+---
+
+### 🧭 Steps to Run Each Script
+
+1. Open PowerShell as Administrator
+   - Click Start → Search for “PowerShell”
+   - Right-click → Run as Administrator
+
+2. Connect to Exchange Online
+   ```powershell
+   Connect-ExchangeOnline
+   ```
+
+3. Connect to Azure AD (if needed)
+   ```powershell
+   Connect-AzureAD
+   ```
+
+4. Run the desired module script
+   - Copy and paste the script into the PowerShell window.
+   - *Edit user-specific details** like:
+     - Distribution group name (`$groupName`)
+     - User email (`$userEmail`)
+     - Target DL (`"All Users"` or custom)
+
+---
+
+### 🔐 **Roles Required**
+To execute these scripts successfully, the account must have:
+- **Exchange Administrator** role
+- **Azure AD Administrator** (for user validation and sync)
+

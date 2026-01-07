@@ -1,0 +1,22 @@
+# Connect to Exchange Online
+$UserCredential = Get-Credential
+Connect-ExchangeOnline -UserPrincipalName $UserCredential.UserName -ShowProgress $true
+
+# Get all active mailboxes and their sizes
+$Mailboxes = Get-Mailbox -ResultSize Unlimited | Where-Object { $_.RecipientTypeDetails -eq 'UserMailbox' }
+$MailboxSizes = @()
+
+foreach ($Mailbox in $Mailboxes) {
+    $MailboxStatistics = Get-MailboxStatistics -Identity $Mailbox.Identity
+    $MailboxSizes += [PSCustomObject]@{
+        DisplayName = $Mailbox.DisplayName
+        PrimarySmtpAddress = $Mailbox.PrimarySmtpAddress
+        TotalItemSize = $MailboxStatistics.TotalItemSize.Value.ToString()
+    }
+}
+
+# Export the data to a CSV file
+$MailboxSizes | Export-Csv -Path "C:\MailboxSizes.csv" -NoTypeInformation
+
+# Disconnect from Exchange Online
+Disconnect-ExchangeOnline -Confirm:$false

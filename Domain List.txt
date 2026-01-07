@@ -1,0 +1,21 @@
+# Connect to Azure AD
+$UserCredential = Get-Credential
+Connect-AzureAD -Credential $UserCredential
+
+# Get all domains
+$Domains = Get-AzureADDomain
+$DomainList = @()
+
+foreach ($Domain in $Domains) {
+    $DomainList += [PSCustomObject]@{
+        DomainName = $Domain.Name
+        IsVerified = $Domain.IsVerified
+        IsDefault = $Domain.IsDefault
+    }
+}
+
+# Export the data to a CSV file
+$DomainList | Export-Csv -Path "C:\DomainList.csv" -NoTypeInformation
+
+# Disconnect from Azure AD
+Disconnect-AzureAD
