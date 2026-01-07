@@ -1,0 +1,8 @@
+#ToEnableArchive and AutoExpandingArchive
+Get-Content "C:\Username\ArchiveEnable.txt" | Enable-Mailbox -Archive
+Get-Content "C:\Username\ArchiveEnable.txt" | Enable-Mailbox -AutoExpandingArchive
+ 
+***********************
+#ToCheckArchiveStatus
+
+Get-Content "C:\Temp\input.txt" | Get-Mailbox | Select-Object DisplayName,PrimarySmtpAddress,ArchiveStatus,AutoExpandingArchiveEnabled | Export-Csv "C:\Temp\input.csv"

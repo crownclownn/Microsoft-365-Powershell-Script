@@ -1,0 +1,4 @@
+#ToGetMailboxSize
+Get-Content "C:\Username\Mailbox.txt" | Get-MailboxStatistics | Select-Object DisplayName, TotalItemSize | Export-Csv "C:\Username\MailboxSize.csv" -NoTypeInformation
+
+#UserPrincipalName as input
