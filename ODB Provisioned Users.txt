@@ -1,0 +1,9 @@
+#ODProvisionedUsers For Specific Users
+$upns = Get-Content "C:\Username\ODProvision.txt"
+$sites = Get-SPOSite -IncludePersonalSite $true -Limit All -Filter "Url -like '-my.sharepoint.com/personal/'"
+$filteredSites = $sites | Where-Object { $upns -contains $_.Owner }
+$filteredSites | Select-Object Url, Owner | Export-Csv "C:\Username\ProvisionedUsers.csv" -NoTypeInformation
+
+
+
+#Input File be UserUPN(abc.d@domain.com) in .txt format

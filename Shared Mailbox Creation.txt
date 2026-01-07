@@ -1,0 +1,1 @@
+Import-Csv "C:\Temp\Username\Shared Mailbox\SM TEST\TESTSM.csv" | foreach {New-Mailbox -Shared -Name $_.name -DisplayName $_.displayname –Alias $_.alias  -PrimarySmtpAddress $_.PrimarySmtpAddress}
